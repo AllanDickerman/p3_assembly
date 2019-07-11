@@ -36,6 +36,8 @@ Avg_read_length = {}
 LOG = None # create a log file at start of main()
 Start_time = None
 Path_to_lib = '.'
+WorkDir = None
+SaveDir = None
 
 def determineReadFileType(read_id):
     """ 
@@ -92,8 +94,8 @@ def trimPairedReads(readPair, args, illumina=False):
         read2_out_base += "_read2"
     read1_out_base += "_trim"
     read2_out_base += "_trim"
-    read1_out_base = os.path.join(args.output_dir, read1_out_base)
-    read2_out_base = os.path.join(args.output_dir, read2_out_base)
+    read1_out_base = os.path.join(WorkDir, read1_out_base)
+    read2_out_base = os.path.join(WorkDir, read2_out_base)
 
     command = ["java", "-jar", os.path.join(Path_to_lib, 'trimmomatic.jar'), "PE", "-threads", str(args.threads)]
     command.extend([readFile1, readFile2, read1_out_base+"_P.fq", read1_out_base+"_U.fq", read2_out_base+"_P.fq", read2_out_base+"_U.fq"])
@@ -128,7 +130,7 @@ def trimSingleReads(readFile, args, illumina=False):
     trimmedFileName = os.path.basename(readFile)
     trimmedFileName = trimmedFileName.split('.')[0]
     trimmedFileName += "_trim.fq"
-    trimmedFileName = os.path.join(args.output_dir, trimmedFileName)
+    trimmedFileName = os.path.join(WorkDir, trimmedFileName)
 
     command = ["java", "-jar", os.path.join(Path_to_lib, 'trimmomatic.jar'), "SE", "-threads", str(args.threads)]
     command.extend([readFile, trimmedFileName])
@@ -452,7 +454,6 @@ def study_all_read_files(args, details):
         for item in args.nanopore:
             fileItemType[item] = 'nanopore'
             singleFiles.append(item)
-
     for item in filePairs:
         LOG.write("studying read pair %s\n"%item)
         LOG.write("\tclaimed type = %s\n"%fileItemType[item])
@@ -489,9 +490,9 @@ def study_all_read_files(args, details):
 
 def writeSpadesYamlFile(args):
     LOG.write("writeSpadesYamlFile: elapsed seconds = %f\n"%(time()-Start_time))
-    if not os.path.isdir(args.output_dir):
-        os.mkdir(args.output_dir)
-    outfileName = os.path.join(args.output_dir, "spades_yaml_file.txt")
+    if not os.path.isdir(WorkDir):
+        os.mkdir(WorkDir)
+    outfileName = os.path.join(WorkDir, "spades_yaml_file.txt")
     OUT = open(outfileName, "w")
     OUT.write("[\n")
     
@@ -525,17 +526,6 @@ def writeSpadesYamlFile(args):
         else:
             if os.path.exists(item) and os.path.getsize(item) > 0:
                 single_end_reads.append(os.path.abspath(item))
-
-
-    #
-    # Validate arguments for metagenomic spades. It can only run with
-    # a single paired-end library.
-    #
-
-    if args.meta:
-        if len(single_end_reads) > 0 or len(paired_end_reads[0]) > 1:
-            sys.stderr.write("SPAdes in metagenomics mode can only process a single paired-end read file\n")
-            sys.exit(1);
 
     precedingElement=False
     if len(single_end_reads):
@@ -590,9 +580,23 @@ def writeSpadesYamlFile(args):
     OUT.close()
     return(outfileName)    
 
+def runQuast(args, contigsFile):
+    quastDir = os.path.join(WorkDir, "quast_out")
+    quastCommand = ["quast.py",
+                    "-o", quastDir,
+                    "-t", str(args.threads),
+                    "--gene-finding",
+                    contigsFile]
+    LOG.write("running quast: "+" ".join(quastCommand)+"\n")
+    return_code = subprocess.call(quastCommand, shell=False)
+    LOG.write("return code = %d\n"%return_code)
+    shutil.move(os.path.join(quastDir, "report.html"), os.path.join(SaveDir, args.prefix+"quast_report.html"))
+    shutil.move(os.path.join(quastDir, "report.txt"), os.path.join(SaveDir, args.prefix+"quast_report.txt"))
+    #shutil.move(os.path.join(quastDir, "icarus_viewers"), os.path.join(SaveDir, "icarus_viewers"))
+
 def runUnicycler(args, details):
     LOG.write("runUnicycler: elapsed seconds = %f\n"%(time()-Start_time))
-    command = ["unicycler", "-t", str(args.threads), "-o", args.output_dir, "--pilon_path", args.pilon_path]
+    command = ["unicycler", "-t", str(args.threads), "-o", WorkDir, "--pilon_path", args.pilon_path]
     if args.min_contig_length:
         command.extend(("--min_fasta_length", str(args.min_contig_length)))
     command.extend(("--keep", "0")) # keep only assembly.gfa, assembly.fasta and unicycler.log
@@ -633,56 +637,33 @@ def runUnicycler(args, details):
                 'elapsed_time' : elapsedTime,
                 'assembler': 'unicycler',
                 'command_line': command,
-                'output_path': os.path.abspath(args.output_dir)
+                'output_path': os.path.abspath(WorkDir)
                 })
 
-    assemblyFile = args.prefix+"assembly.fasta"
+    assemblyFile = args.prefix+"contigs.fasta"
     assemblyGraphFile = args.prefix+"assembly_graph.gfa"
     unicyclerLogFile = args.prefix+"unicycler.log"
 
+    shutil.move(os.path.join(WorkDir, "assembly.fasta"), os.path.join(SaveDir, assemblyFile))
+    shutil.move(os.path.join(WorkDir, "assembly.gfa"), os.path.join(SaveDir, assemblyGraphFile))
+    shutil.move(os.path.join(WorkDir, "unicycler.log"), os.path.join(SaveDir, unicyclerLogFile))
 
-    shutil.move(os.path.join(args.output_dir, "assembly.fasta"), os.path.join(args.output_dir, assemblyFile))
-    shutil.move(os.path.join(args.output_dir, "assembly.gfa"), os.path.join(args.output_dir, assemblyGraphFile))
-    shutil.move(os.path.join(args.output_dir, "unicycler.log"), os.path.join(args.output_dir, unicyclerLogFile))
-
-    details['output_files'] = []
-    details['output_files'].append([assemblyFile, 'fasta', 'Genome assembly'])
-    details['output_files'].append([assemblyGraphFile, 'gfa', 'Assembly graph'])
-    details['output_files'].append([unicyclerLogFile, 'txt', 'Unicycler logfile'])
-    
     LOG.write("Duration of Unicycler run was %.1f hours\n"%(elapsedTime/3600.0))
-    if not args.no_quast:
-        quastDir = os.path.join(args.output_dir, "quast_out")
-        quastCommand = [args.quast_exec,
-                        "-o", quastDir,
-                        "-t", str(args.threads),
-                        "--gene-finding",
-                        os.path.join(args.output_dir, assemblyFile)]
-        LOG.write("running quast: "+" ".join(quastCommand)+"\n")
-        return_code = subprocess.call(quastCommand, shell=False)
-        LOG.write("return code = %d\n"%return_code)
-        shutil.move(os.path.join(quastDir, "report.html"), os.path.join(args.output_dir, args.prefix+"quast_report.html"))
-        shutil.move(os.path.join(quastDir, "icarus_viewers"), os.path.join(args.output_dir, "icarus_viewers"))
-        details['output_files'].append([args.prefix+"quast_report.html", 'html', 'Quast report'])
-        details['output_files'].append([args.prefix+"icarus_viewers", 'dir', 'Quast icarus viewers'])
-
-    LOG.write("Duration of Unicycler run was %f hours\n"%(elapsedTime/3600.0))
+    return assemblyFile
 
 def runSpades(args, details):
     LOG.write("runSpades: elapsed seconds = %f\n"%(time()-Start_time))
-    #if ("illumina_pe" in args.output_dirr "illumina_se" in args) and ("iontorrent_pe" in args or "iontorrent_se" in args):
+
     if args.illumina and args.iontorrent:
         details["Fatal_error"] = "SPAdes cannot process both Illumina and IonTorrent reads in the same run"
         return
-    command = ["spades.py", "--threads", str(args.threads), "-o", args.output_dir]
+    command = ["spades.py", "--threads", str(args.threads), "-o", WorkDir]
     if args.singlecell:
         command.append("--sc")
     if args.iontorrent:
         command.append("--iontorrent") # tell SPAdes that this is the read type
     yamlFile = writeSpadesYamlFile(args)
     command.extend(["--dataset", yamlFile])
-    if args.only_assembler:
-        command.append("--only-assembler")
     if args.trusted_contigs:
         command.extend(["--trusted-contigs", args.trusted_contigs])
     if args.untrusted_contigs:
@@ -693,6 +674,15 @@ def runSpades(args, details):
         command.extend(["-m", str(args.memory)])
     if args.meta:
         command.append("--meta")
+        #
+        # Validate arguments for metagenomic spades. It can only run with
+        # a single paired-end library.
+        #
+        if len(single_end_reads) > 0 or len(paired_end_reads[0]) > 1:
+            sys.stderr.write("SPAdes in metagenomics mode can only process a single paired-end read file\n")
+            sys.exit(1);
+    if args.plasmid:
+        command.append("--plasmid")
     LOG.write("SPAdes command =\n"+" ".join(command)+"\n")
     LOG.write("    PATH:  "+os.environ["PATH"]+"\n\n")
     spadesStartTime = time()
@@ -708,44 +698,65 @@ def runSpades(args, details):
                 'spades_elapsed_time' : elapsedTime,
                 'assembler': 'spades',
                 'command_line': command,
-                'output_path': os.path.abspath(args.output_dir)
+                'output_path': os.path.abspath(WorkDir)
                 })
-    scaffoldsFile = args.prefix+"scaffolds.fasta"
     contigsFile = args.prefix+"contigs.fasta"
     assemblyGraphFile = args.prefix+"assembly_graph.gfa"
     spadesLogFile = args.prefix+"spades.log"
     
-    shutil.move(os.path.join(args.output_dir, "scaffolds.fasta"), os.path.join(args.output_dir, scaffoldsFile))
-    shutil.move(os.path.join(args.output_dir, "contigs.fasta"), os.path.join(args.output_dir, contigsFile))
-    shutil.move(os.path.join(args.output_dir, "assembly_graph_with_scaffolds.gfa"), os.path.join(args.output_dir, assemblyGraphFile))
-    shutil.move(os.path.join(args.output_dir, "spades.log"), os.path.join(args.output_dir, spadesLogFile))
+    #shutil.move(os.path.join(WorkDir, "scaffolds.fasta"), os.path.join(WorkDir, scaffoldsFile))
+    shutil.move(os.path.join(WorkDir, "contigs.fasta"), os.path.join(SaveDir, contigsFile))
+    shutil.move(os.path.join(WorkDir, "assembly_graph.gfa"), os.path.join(SaveDir, assemblyGraphFile))
+    shutil.move(os.path.join(WorkDir, "spades.log"), os.path.join(SaveDir, spadesLogFile))
 
-    details['output_files'] = []
-    details['output_files'].append([scaffoldsFile, 'fasta', 'Generated scaffolds'])
-    details['output_files'].append([contigsFile, 'fasta', 'Generated contigs'])
-    details['output_files'].append([assemblyGraphFile, 'gfa', 'Assembly graph'])
-    details['output_files'].append([spadesLogFile, 'txt', 'Spades logfile'])
-    
-    if not args.no_quast:
-        quastDir = os.path.join(args.output_dir, "quast_out")
-        quastCommand = [args.quast_exec,
-                        "-o", quastDir,
-                        "-t", str(args.threads),
-                        "--gene-finding",
-                        os.path.join(args.output_dir, scaffoldsFile),
-                        os.path.join(args.output_dir, contigsFile)]
-        LOG.write("running quast: "+" ".join(quastCommand)+"\n")
-        return_code = subprocess.call(quastCommand, shell=False)
-        LOG.write("return code = %d\n"%return_code)
-        shutil.move(os.path.join(quastDir, "report.html"), os.path.join(args.output_dir, args.prefix+"quast_report.html"))
-        shutil.move(os.path.join(quastDir, "icarus_viewers"), os.path.join(args.output_dir, "icarus_viewers"))
-        details['output_files'].append([args.prefix+"quast_report.html", 'html', 'Quast report'])
-        details['output_files'].append([args.prefix+"icarus_viewers", 'dir', 'Quast icarus viewers'])
-
+    elapsedTime = time() - spadesStartTime
     LOG.write("Duration of SPAdes run was %.1f hours\n"%(elapsedTime/3600.0))
+    return contigsFile
+
+def runRacon(contigFile, longReadFastq, args, details):
+    """
+    Polish (correct) sequence of assembled contigs by comparing to the original long-read sequences
+    1. Index contigs for minimap2 (generate mmi file).
+    2. Map long reads to contigs by minimap2 (read paf-file, readsFile; generate paf file).
+    3. Run racon on reads, read-to-contig-map, contigs. Generate polished contigs.
+    Return name of polished contigs.
+    """
+    minimapLogFile = open(os.path.join(WorkDir, "minimap.log"), 'a')
+    raconLogFile = open(os.path.join(WorkDir, "racon.log"), 'a')
+    raconStartTime = time()
+    # index contig sequences
+    contigIndex = contigFile.replace(".fasta", ".mmi")
+    command = ["minimap", "-t", str(args.threads), "-d", contigFile, contigIndex] 
+    tempTime = time() 
+    LOG.write("minimap2 index command:\n"+str(command)+"\n")
+    return_code = subprocess.call(command, shell=False, stderr=minimapLogFile)
+    LOG.write("minimap2 index return code = %d\n"%return_code)
+    details['minimap2_index_time'] = time()-tempTime
+
+    # map long reads to contigs
+    contigMiniMap = contigFile.replace("contigs.fasta", "contigs.minimap.paf")
+    command = ["minimap2", "-t", str(args.threads), "-c", "-o", contigMiniMap, contigIndex, longReadFastq]
+    tempTime = time()
+    Log.write("minimap2 map command:\n"+command+"\n")
+    return_code = subprocess.call(command, shell=False, stderr=minimapLogFile)
+    LOG.write("minimap2 map return code = %d\n"%return_code)
+    details['minimap2_map_time'] = time()-tempTime
+
+    # run racon
+    raconContigs = contigFile.replace("contigs.fasta", "racon.contigs.fasta")
+    command = ["racon", "-t", str(args.threads), "-u", longReadFastq, contigMiniMap, raconContigs]
+    tempTime = time()
+    Log.write("racon command: \n"+command+"\n")
+    return_code = subprocess.call(command, shell=False, stderr=minimapLogFile)
+    LOG.write("racon return code = %d\n"%return_code)
+    details['racon time'] = time()-tempTime
+
+    LOG.write("Racon total time = %d seconds\n"%(time()-raconStartTime))
+    return raconContigs
 
 def runCanu(args, details):
-    LOG.write("runCanu: elapsed seconds = %f\n"%(time()-Start_time))
+    canuStartTime = time()
+    LOG.write("runCanu: elapsed seconds = %d\n"%(canuStartTime-Start_time))
     comment = """
 usage: canu [-version] [-citation] \
             [-correct | -trim | -assemble | -trim-assemble] \
@@ -757,18 +768,11 @@ usage: canu [-version] [-citation] \
             [-pacbio-raw | -pacbio-corrected | -nanopore-raw | -nanopore-corrected] file1 file2 ...
 """
 # canu -d /localscratch/allan/canu_assembly -p p6_25X gnuplotTested=true genomeSize=5m useGrid=false -pacbio-raw pacbio_p6_25X.fastq
-    command = ["canu", "-d", args.output_dir, "-p", "canu", "useGrid=false", "genomeSize=%s"%args.genome_size]
+    command = ["canu", "-d", WorkDir, "-p", "canu", "useGrid=false", "genomeSize=%s"%args.genome_size]
     command.extend(["maxMemory=" + str(args.memory), "maxThreads=" + str(args.threads)])
     """
-    The 'minMemory', 'maxMemory', 'minThreads' and 'maxThreads'
-    options will apply to all jobs, and can be used to artificially
-    limit canu to a portion of the current machine. 
     https://canu.readthedocs.io/en/latest/parameter-reference.html
     """
-
-#    for prefix in ("mhap", "mmap", "ovl", "ovb", "cor", "red", "oea", "bat",
-#            "cns"):
-#        command.append(prefix+"Concurrency=1")
     if args.pacbio:
         command.append("-pacbio-raw")
         command.extend(args.pacbio) #allow multiple files
@@ -779,7 +783,7 @@ usage: canu [-version] [-citation] \
     #LOG.write("    PATH:  "+os.environ["PATH"]+"\n\n")
 
     canuStartTime = time()
-    canuLogFile = open(os.path.join(args.output_dir, "canu.log"), "w")
+    canuLogFile = open(os.path.join(WorkDir, "canu.log"), "w")
     return_code = subprocess.call(command, shell=False, stderr=canuLogFile)
     LOG.write("return code = %d\n"%return_code)
     canuEndTime = time()
@@ -790,116 +794,80 @@ usage: canu [-version] [-citation] \
                 'canu_elapsed_time' : elapsedTime,
                 'assembler': 'canu',
                 'command_line': command,
-                'output_path': os.path.abspath(args.output_dir)
+                'output_path': os.path.abspath(WorkDir)
                 })
+
+    contigFile = os.path.join(WorkDir, "canu.contigs.fasta")
     
-    details['output_files'] = []
-    if os.path.exists(os.path.join(args.output_dir, "canu.log")):
-        details['output_files'].append(["canu.log", 'txt', 'Canu log'])
-        if os.path.exists(os.path.join(args.output_dir, "canu.report")):
-            canuReportFile = args.prefix+"canu_report.txt"
-            shutil.move(os.path.join(args.output_dir, "canu.report"), os.path.join(args.output_dir, canuReportFile))
-            details['output_files'].append([canuReportFile, 'txt', 'Canu report'])
+    # now run racon with each long-read file
+    for longReadFastq in args.pacbio + args.nanopore:
+        contigFile = runRacon(contigFile, longReadFastq, args, details)
 
-    if os.path.exists(os.path.join(args.output_dir, "canu.contigs.fasta")):
-        unitigsFile = args.prefix+"unitigs.fasta"
-        contigsFile = args.prefix+"contigs.fasta"
-        unitigsGraphFile = args.prefix+"unitigs.gfa"
-        contigsGraphFile = args.prefix+"contigs.gfa"
-        shutil.move(os.path.join(args.output_dir, "canu.unitigs.fasta"), os.path.join(args.output_dir, unitigsFile))
-        shutil.move(os.path.join(args.output_dir, "canu.contigs.fasta"), os.path.join(args.output_dir, contigsFile))
-        shutil.move(os.path.join(args.output_dir, "canu.unitigs.gfa"), os.path.join(args.output_dir, unitigsGraphFile))
-        shutil.move(os.path.join(args.output_dir, "canu.contigs.gfa"), os.path.join(args.output_dir, contigsGraphFile))
-        details['output_files'].append([unitigsFile, 'fasta', 'Canu unitigs'])
-        details['output_files'].append([contigsFile, 'fasta', 'Canu contigs'])
-        details['output_files'].append([unitigsGraphFile, 'gfa', 'Unitigs graph'])
-        details['output_files'].append([contigsGraphFile, 'gfa', 'Contigs graph'])
-        if not args.no_quast:
-            quastDir = os.path.join(args.output_dir, "quast_out")
-            quastCommand = [args.quast_exec,
-                            "-o", quastDir,
-                            "-t", str(args.threads),
-                            "--gene-finding",
-                            os.path.join(args.output_dir, unitigsFile),
-                            os.path.join(args.output_dir, contigsFile)]
-            LOG.write("running quast: "+" ".join(quastCommand)+"\n")
-            return_code = subprocess.call(quastCommand, shell=False)
-            LOG.write("return code = %d\n"%return_code)
-            shutil.move(os.path.join(quastDir, "report.html"), os.path.join(args.output_dir, args.prefix+"quast_report.html"))
-            shutil.move(os.path.join(quastDir, "icarus_viewers"), os.path.join(args.output_dir, "icarus_viewers"))
-            details['output_files'].append([args.prefix+"quast_report.html", 'html', 'Quast report'])
-            details['output_files'].append([args.prefix+"icarus_viewers", 'dir', 'Quast icarus viewers'])
-
-    LOG.write("Duration of canu run was %.1f hours\n"%(elapsedTime/3600.0))
+    shutil.mv(contigFile, os.path.join(SaveDir, "contigs.fasta"))
+    
+    LOG.write("Duration of canu run was %.1f minutes\n"%(time() - canuStartTime)/60.0)
+    return os.path.join(SaveDir, prefix+"contigs.fasta")
 
 def main():
-    global Path_to_lib
-    #Path_to_lib = os.path.dirname(sys.argv[0])
-    #Path_to_lib = "/".join(Path_to_lib.split("/")[:-1])
-    #Path_to_lib += "/lib"
     global Start_time
     Start_time = time()
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-o', '--output_dir', default='.', help='output directory.', required=False)
     illumina_or_iontorrent = parser.add_mutually_exclusive_group()
     illumina_or_iontorrent.add_argument('--illumina', nargs='*', help='Illumina fastq[.gz] files or pairs; use ":" between end-pairs or "%%" between mate-pairs', required=False, default=[])
     illumina_or_iontorrent.add_argument('--iontorrent', nargs='*', help='list of IonTorrent[.gz] files or pairs, ":" between paired-end-files', required=False, default=[])
-    parser.add_argument('--singlecell', action = 'store_true', help='flag for single-cell MDA data for SPAdes', required=False)
-    parser.add_argument('--meta', action = 'store_true', help='run in metagenome mode', required=False)
-    parser.add_argument('--pacbio', nargs='*', help='list of Pacific Biosciences fastq[.gz] or bam files', required=False)
+    parser.add_argument('--pacbio', nargs='*', help='list of Pacific Biosciences fastq[.gz] or bam files', required=False, default=[])
+    parser.add_argument('--nanopore', nargs='*', help='list of Oxford Nanotech fastq[.gz] or bam files', required=False, default=[])
     parser.add_argument('--sra', nargs='*', help='list of SRA run accessions (e.g. SRR5070677), will be downloaded from NCBI', required=False)
-    parser.add_argument('--nanopore', nargs='*', help='list of Oxford Nanotech fastq[.gz] or bam files', required=False)
-    parser.add_argument('--prefix', help='prefix for output files', required=False)
+    parser.add_argument('--anonymous_reads', nargs='*', help="unspecified read files, types automatically inferred.")
+    parser.add_argument('--recipe', choices=['unicycler', 'canu', 'spades', 'auto'], help='assembler to use', default='auto')
+    parser.add_argument('--singlecell', action = 'store_true', help='flag for single-cell MDA data for SPAdes', required=False)
+    parser.add_argument('--meta', action = 'store_true', help='run meta-spades, requires recipe=spades')
+    parser.add_argument('--plasmid', action = 'store_true', help='run plasmid-spades, requires recipe=spades')
+    parser.add_argument('--prefix', default="", help='prefix for output files', required=False)
     parser.add_argument('--genome_size', default=Default_genome_size, help='genome size for canu: e.g. 300k or 5m or 1.1g', required=False)
     parser.add_argument('--min_contig_length', default=1000, help='save contigs of this length or longer', required=False)
     #parser.add_argument('--fasta', nargs='*', help='list of fasta files "," between libraries', required=False)
-    parser.add_argument('--anonymous_reads', nargs='*', help="unspecified read files, types automatically inferred.")
     parser.add_argument('--trusted_contigs', help='for SPAdes, same-species contigs known to be good', required=False)
     parser.add_argument('--untrusted_contigs', help='for SPAdes, same-species contigs used gap closure and repeat resolution', required=False)
-    parser.add_argument('--no_careful', action = 'store_true', help='turn off careful flag to SPAdes (faster)', required=False)
-    parser.add_argument('--spades_only', action = 'store_true', help='Use SPAdes instead of Unicycler for short reads or hybrid', required=False)
-    parser.add_argument("--only-assembler", action = 'store_true', help='turn off SPAdes error correction step', required=False)
     parser.add_argument('-t', '--threads', metavar='cpus', type=int, default=4)
-    parser.add_argument('-m', '--memory', metavar='GB', type=int, help='RAM limit for SPAdes in Gb', default=250)
-    parser.add_argument('--bytes_to_sample', metavar='bytes', type=int, default=Default_bytes_to_sample, help='how much to sample from read files to test file type')
+    parser.add_argument('-m', '--memory', metavar='GB', type=int, default=250, help='RAM limit in Gb')
     parser.add_argument('--runTrimmomatic', action = 'store_true', help='run trimmomatic on Illumina or Iontorrent fastq files')
-    #parser.add_argument('--trimmomatic_jar', default='trimmomatic.jar', help='trimmomatic jar file, with path')
+    parser.add_argument('--trimmomatic_jar', default='trimmomatic.jar', help='trimmomatic jar file, with path')
     parser.add_argument('--illuminaAdapters', default='illumina_adapters.fa', help='illumina adapters file, looked for in script directory')
     parser.add_argument('--trimmomaticWindow', metavar="width", type=int, default=Default_window_width, help='window width for trimming')
     parser.add_argument('--trimmomaticMinQual', metavar="phred", type=int, default=Default_window_quality, help='score of window below which 3\' end is trimmed')
     parser.add_argument('--trimmomaticEndQual', metavar="phred", type=int, default=Default_end_quality, help='score at which individual 3\' bases are trimmed')
-    parser.add_argument('--no_quast', action = 'store_true', help='turn off runing quast for assembly quality statistics')
-    parser.add_argument('--quast_exec', default='quast.py', help='path to quast.py (if not on path)')
     parser.add_argument('--pilon_path', default='pilon', help='path to pilon executable or jar')
-    parser.add_argument('--run-details', help='JSON-format document describing details of the run', required=False)
-    parser.add_argument('--logfile', help='Log file', required=False)
     parser.add_argument('--params_json', help="JSON file with additional information.")
+
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(2)
     args = parser.parse_args()
-    args.prefix = os.path.basename(args.output_dir)
-    args.prefix = args.prefix.rstrip("_")+"_"
-    if args.logfile:
-        logfileName = os.path.abspath(args.logfile)
-    else:
-        logfileName = os.path.basename(sys.argv[0])
-        logfileName = logfileName.replace(".py", "")
-        logfileName = args.prefix + logfileName
-        logfileName = os.path.join(args.output_dir, logfileName)+".log"
-    if not os.path.exists(args.output_dir):
-        os.mkdir(args.output_dir)
+    baseName = os.path.basename(sys.argv[0])
+    baseName = baseName.replace(".py", "")
+    global WorkDir
+    global SaveDir
+    WorkDir = baseName+"_work"
+    SaveDir = baseName+"_save"
+    logfileName = os.path.join(WorkDir, args.prefix + baseName + ".log")
+    if not os.path.exists(WorkDir):
+        os.mkdir(WorkDir)
+    if os.path.exists(SaveDir):
+        shutil.rmtree(SaveDir)
+    os.mkdir(SaveDir)
+
     global LOG 
     sys.stderr.write("logging to "+logfileName+"\n")
     LOG = open(logfileName, 'w', 0) #unbuffered 
     LOG.write("starting %s\n"%sys.argv[0])
     LOG.write(strftime("%a, %d %b %Y %H:%M:%S", localtime(Start_time))+"\n")
     LOG.write("args= "+str(args)+"\n\n")
+    LOG.write("Final output will be saved to = "+SaveDir+"\n\n")
 
     details = { 'logfile' : logfileName }
     if args.anonymous_reads:
         categorize_anonymous_read_files(args)
-# if any illumina or iontorrent reads present, use Unicycler (long-reads can be present), else use canu for long-reads
     if args.sra:
         fetch_sra_files(args, details)
     study_all_read_files(args, details)
@@ -910,7 +878,7 @@ def main():
             processedFileList = []
             for item in fileList:
                 if ':' in item or '%' in item:
-                    (verifiedPair, unpaired) = verifyReadPairing(item, args.output_dir)
+                    (verifiedPair, unpaired) = verifyReadPairing(item, WorkDir)
                     if args.runTrimmomatic:
                         (trimmedPair, trimmedUnpaired) = trimPairedReads(verifiedPair, args, illumina=(fileList == args.illumina))
                         processedFileList.append(trimmedPair)
@@ -934,23 +902,28 @@ def main():
                 args.illumina = processedFileList
             else:
                 args.iontorrent = processedFileList
-        if args.spades_only:
-            runSpades(args, details)
-        else:
-            runUnicycler(args, details)
-    else: # long reads only, use canu
+    if args.recipe == "auto":
+        #now must decide which assembler to use
+        # original rule: if any illumina or iontorrent reads present, use Unicycler (long-reads can be present), else use canu for long-reads
+        # alternative rule: if any long reads present, use canu
+        if args.pacbio or args.nanopore:
+            args.recipe = "canu"
+    if args.recipe == "spades":
+        runSpades(args, details)
+    elif args.recipe == "unicycler":
+        runUnicycler(args, details)
+    elif args.recipe == "canu":
         runCanu(args, details)
+    else:
+        fatalError("cannot interpret args.recipe: "+args.recipe)
+
+    runQuast(os.path.join(SaveDir, prefix+"contigs.fasta"))
     LOG.write("done with %s\n"%sys.argv[0])
     LOG.write(strftime("%a, %d %b %Y %H:%M:%S", localtime(time()))+"\n")
     if args.run_details:
-        fp = file(os.path.join(args.output_dir, args.run_details), "w")
+        fp = file(os.path.join(SaveDir, args.run_details), "w")
         json.dump(details, fp, indent=2)
         fp.close()
-    if "output_files" not in details:
-        details["output_files"] = []
-    details["output_files"].append([args.run_details, "json", "run_details"])
-
 
 if __name__ == "__main__":
     main()
- 
