@@ -40,7 +40,7 @@ This module provides the following application specfication:
 ## See also
 
 * [Genome Assembly Service Quick Reference](https://www.bv-brc.org/docs/quick_references/services/genome_assembly_service.html)
-* [Genome Assembly Service](https://www.bv-brc.org/docs/https://bv-brc.org/app/Assembly2.html)
+* [Genome Assembly Service](https://www.bv-brc.org/app/Assembly2)
 * [Genome Assembly Service Tutorial](https://www.bv-brc.org/docs//tutorial/genome_assembly/assembly.html)
 
 
