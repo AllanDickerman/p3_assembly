@@ -548,7 +548,7 @@ class ReadLibrary:
         self.file_size[0] = os.path.getsize(out_file)
         self.files[0] = out_file
         if not save_original: 
-            os.unlink(self.files[0]) # free up disk space
+            os.unlink(read_file) # free up disk space
         self.study_reads()
         ReadLibrary.LOG.write("after filtlong: files = "+", ".join(self.files)+"\n")
 
