@@ -65,8 +65,7 @@ sub preflight
     my $token = $app->token();
     my $ws = $app->workspace();
 
-    my $readset;
-    eval {
+
 	$readset = Bio::KBase::AppService::ReadSet->create_from_asssembly_params($params);
     };
     if ($@)
@@ -93,6 +92,10 @@ sub preflight
     if ($plats{nanopore} || $plats{pacbio})
     {
 	$est_time *= 5;
+
+        if ($plats{illumina}) { # hybrid assemblies take longer
+            $est_time *= 2;
+        }
     }
 
     #
