@@ -94,7 +94,7 @@ sub preflight
 	$est_time *= 5;
 
         if ($plats{illumina}) { # hybrid assemblies take longer
-            $est_time *= 2;
+            $est_time *= 4;
         }
     }
 
